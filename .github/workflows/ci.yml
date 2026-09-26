@@ -1,4 +1,4 @@
-```yaml
+
 name: Frontend CI
 
 on:
@@ -45,4 +45,4 @@ jobs:
           echo "Pushing image: $IMAGE"
 
           docker push "$IMAGE"
-```
+
