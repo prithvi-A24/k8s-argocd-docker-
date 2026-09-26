@@ -1,3 +1,4 @@
+```yaml
 name: Frontend CI
 
 on:
@@ -29,11 +30,19 @@ jobs:
 
       - name: Build frontend image
         run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/online-boutique-frontend:${GITHUB_SHA}"
+
+          echo "Building image: $IMAGE"
+
           docker build \
-            -t ghcr.io/${{ github.repository_owner }}/online-boutique-frontend:${{ github.sha }} \
+            -t "$IMAGE" \
             ./src/frontend
 
       - name: Push frontend image
         run: |
-          docker push \
-            ghcr.io/${{ github.repository_owner }}/online-boutique-frontend:${{ github.sha }}
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/online-boutique-frontend:${GITHUB_SHA}"
+
+          echo "Pushing image: $IMAGE"
+
+          docker push "$IMAGE"
+```
