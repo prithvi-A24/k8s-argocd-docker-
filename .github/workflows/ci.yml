@@ -1,5 +1,4 @@
-
-name: Frontend CI
+name: Online Boutique CI
 
 on:
   push:
@@ -14,8 +13,61 @@ permissions:
   packages: write
 
 jobs:
-  build-frontend:
+  build-and-push:
+    name: Build ${{ matrix.service }}
     runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: adservice
+            context: ./src/adservice
+            dockerfile: ./src/adservice/Dockerfile
+
+          - service: cartservice
+            context: ./src/cartservice
+            dockerfile: ./src/cartservice/src/Dockerfile
+
+          - service: checkoutservice
+            context: ./src/checkoutservice
+            dockerfile: ./src/checkoutservice/Dockerfile
+
+          - service: currencyservice
+            context: ./src/currencyservice
+            dockerfile: ./src/currencyservice/Dockerfile
+
+          - service: emailservice
+            context: ./src/emailservice
+            dockerfile: ./src/emailservice/Dockerfile
+
+          - service: frontend
+            context: ./src/frontend
+            dockerfile: ./src/frontend/Dockerfile
+
+          - service: loadgenerator
+            context: ./src/loadgenerator
+            dockerfile: ./src/loadgenerator/Dockerfile
+
+          - service: paymentservice
+            context: ./src/paymentservice
+            dockerfile: ./src/paymentservice/Dockerfile
+
+          - service: productcatalogservice
+            context: ./src/productcatalogservice
+            dockerfile: ./src/productcatalogservice/Dockerfile
+
+          - service: recommendationservice
+            context: ./src/recommendationservice
+            dockerfile: ./src/recommendationservice/Dockerfile
+
+          - service: shippingservice
+            context: ./src/shippingservice
+            dockerfile: ./src/shippingservice/Dockerfile
+
+          - service: shoppingassistantservice
+            context: ./src/shoppingassistantservice
+            dockerfile: ./src/shoppingassistantservice/Dockerfile
 
     steps:
       - name: Checkout source
@@ -28,21 +80,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build frontend image
+      - name: Build Docker image
         run: |
-          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/online-boutique-frontend:${GITHUB_SHA}"
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/online-boutique-${{ matrix.service }}:${GITHUB_SHA}"
 
-          echo "Building image: $IMAGE"
+          echo "Building: $IMAGE"
 
           docker build \
+            -f "${{ matrix.dockerfile }}" \
             -t "$IMAGE" \
-            ./src/frontend
+            "${{ matrix.context }}"
 
-      - name: Push frontend image
+      - name: Push Docker image
+        if: github.event_name == 'push'
         run: |
-          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/online-boutique-frontend:${GITHUB_SHA}"
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/online-boutique-${{ matrix.service }}:${GITHUB_SHA}"
 
-          echo "Pushing image: $IMAGE"
+          echo "Pushing: $IMAGE"
 
           docker push "$IMAGE"
-
