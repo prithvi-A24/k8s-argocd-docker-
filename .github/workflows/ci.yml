@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - devops
+
   pull_request:
     branches:
       - devops
@@ -11,68 +12,177 @@ on:
 permissions:
   contents: read
   packages: write
+  pull-requests: read
 
 jobs:
-  build-and-push:
-    name: Build ${{ matrix.service }}
+
+  # ============================================================
+  # 1. DETECT WHICH MICROSERVICES CHANGED
+  # ============================================================
+  detect-changes:
+    name: Detect changed services
     runs-on: ubuntu-latest
 
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - service: adservice
-            context: ./src/adservice
-            dockerfile: ./src/adservice/Dockerfile
-
-          - service: cartservice
-            context: ./src/cartservice/src
-            dockerfile: ./src/cartservice/src/Dockerfile
-
-          - service: checkoutservice
-            context: ./src/checkoutservice
-            dockerfile: ./src/checkoutservice/Dockerfile
-
-          - service: currencyservice
-            context: ./src/currencyservice
-            dockerfile: ./src/currencyservice/Dockerfile
-
-          - service: emailservice
-            context: ./src/emailservice
-            dockerfile: ./src/emailservice/Dockerfile
-
-          - service: frontend
-            context: ./src/frontend
-            dockerfile: ./src/frontend/Dockerfile
-
-          - service: loadgenerator
-            context: ./src/loadgenerator
-            dockerfile: ./src/loadgenerator/Dockerfile
-
-          - service: paymentservice
-            context: ./src/paymentservice
-            dockerfile: ./src/paymentservice/Dockerfile
-
-          - service: productcatalogservice
-            context: ./src/productcatalogservice
-            dockerfile: ./src/productcatalogservice/Dockerfile
-
-          - service: recommendationservice
-            context: ./src/recommendationservice
-            dockerfile: ./src/recommendationservice/Dockerfile
-
-          - service: shippingservice
-            context: ./src/shippingservice
-            dockerfile: ./src/shippingservice/Dockerfile
-
-          - service: shoppingassistantservice
-            context: ./src/shoppingassistantservice
-            dockerfile: ./src/shoppingassistantservice/Dockerfile
+    outputs:
+      services: ${{ steps.filter.outputs.changes }}
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      - name: Detect changed services
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+
+            adservice:
+              - 'src/adservice/**'
+
+            cartservice:
+              - 'src/cartservice/**'
+
+            checkoutservice:
+              - 'src/checkoutservice/**'
+
+            currencyservice:
+              - 'src/currencyservice/**'
+
+            emailservice:
+              - 'src/emailservice/**'
+
+            frontend:
+              - 'src/frontend/**'
+
+            loadgenerator:
+              - 'src/loadgenerator/**'
+
+            paymentservice:
+              - 'src/paymentservice/**'
+
+            productcatalogservice:
+              - 'src/productcatalogservice/**'
+
+            recommendationservice:
+              - 'src/recommendationservice/**'
+
+            shippingservice:
+              - 'src/shippingservice/**'
+
+            shoppingassistantservice:
+              - 'src/shoppingassistantservice/**'
+
+
+      - name: Show changed services
+        run: |
+          echo "Changed services:"
+          echo '${{ steps.filter.outputs.changes }}' | jq .
+
+
+  # ============================================================
+  # 2. BUILD + PUSH ONLY CHANGED SERVICES
+  # ============================================================
+  build-and-push:
+    name: Build ${{ matrix.service }}
+
+    needs: detect-changes
+
+    if: needs.detect-changes.outputs.services != '[]'
+
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+
+      matrix:
+        service: ${{ fromJSON(needs.detect-changes.outputs.services) }}
+
+    steps:
+
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+
+      # --------------------------------------------------------
+      # Map service → Docker build context
+      # --------------------------------------------------------
+      - name: Set Docker build configuration
+        id: config
+        run: |
+
+          case "${{ matrix.service }}" in
+
+            adservice)
+              echo "context=./src/adservice" >> "$GITHUB_OUTPUT"
+              echo "dockerfile=./src/adservice/Dockerfile" >> "$GITHUB_OUTPUT"
+              ;;
+
+            cartservice)
+              echo "context=./src/cartservice/src" >> "$GITHUB_OUTPUT"
+              echo "dockerfile=./src/cartservice/src/Dockerfile" >> "$GITHUB_OUTPUT"
+              ;;
+
+            checkoutservice)
+              echo "context=./src/checkoutservice" >> "$GITHUB_OUTPUT"
+              echo "dockerfile=./src/checkoutservice/Dockerfile" >> "$GITHUB_OUTPUT"
+              ;;
+
+            currencyservice)
+              echo "context=./src/currencyservice" >> "$GITHUB_OUTPUT"
+              echo "dockerfile=./src/currencyservice/Dockerfile" >> "$GITHUB_OUTPUT"
+              ;;
+
+            emailservice)
+              echo "context=./src/emailservice" >> "$GITHUB_OUTPUT"
+              echo "dockerfile=./src/emailservice/Dockerfile" >> "$GITHUB_OUTPUT"
+              ;;
+
+            frontend)
+              echo "context=./src/frontend" >> "$GITHUB_OUTPUT"
+              echo "dockerfile=./src/frontend/Dockerfile" >> "$GITHUB_OUTPUT"
+              ;;
+
+            loadgenerator)
+              echo "context=./src/loadgenerator" >> "$GITHUB_OUTPUT"
+              echo "dockerfile=./src/loadgenerator/Dockerfile" >> "$GITHUB_OUTPUT"
+              ;;
+
+            paymentservice)
+              echo "context=./src/paymentservice" >> "$GITHUB_OUTPUT"
+              echo "dockerfile=./src/paymentservice/Dockerfile" >> "$GITHUB_OUTPUT"
+              ;;
+
+            productcatalogservice)
+              echo "context=./src/productcatalogservice" >> "$GITHUB_OUTPUT"
+              echo "dockerfile=./src/productcatalogservice/Dockerfile" >> "$GITHUB_OUTPUT"
+              ;;
+
+            recommendationservice)
+              echo "context=./src/recommendationservice" >> "$GITHUB_OUTPUT"
+              echo "dockerfile=./src/recommendationservice/Dockerfile" >> "$GITHUB_OUTPUT"
+              ;;
+
+            shippingservice)
+              echo "context=./src/shippingservice" >> "$GITHUB_OUTPUT"
+              echo "dockerfile=./src/shippingservice/Dockerfile" >> "$GITHUB_OUTPUT"
+              ;;
+
+            shoppingassistantservice)
+              echo "context=./src/shoppingassistantservice" >> "$GITHUB_OUTPUT"
+              echo "dockerfile=./src/shoppingassistantservice/Dockerfile" >> "$GITHUB_OUTPUT"
+              ;;
+
+            *)
+              echo "Unknown service: ${{ matrix.service }}"
+              exit 1
+              ;;
+
+          esac
+
+
+      # --------------------------------------------------------
+      # Login to GHCR
+      # --------------------------------------------------------
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -80,33 +190,59 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+
+      # --------------------------------------------------------
+      # Build
+      # --------------------------------------------------------
       - name: Build Docker image
         run: |
+
           IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/online-boutique-${{ matrix.service }}:${GITHUB_SHA}"
 
-          echo "Building: $IMAGE"
+          echo "======================================"
+          echo "Service: ${{ matrix.service }}"
+          echo "Context: ${{ steps.config.outputs.context }}"
+          echo "Dockerfile: ${{ steps.config.outputs.dockerfile }}"
+          echo "Image: $IMAGE"
+          echo "======================================"
 
           docker build \
-            -f "${{ matrix.dockerfile }}" \
+            -f "${{ steps.config.outputs.dockerfile }}" \
             -t "$IMAGE" \
-            "${{ matrix.context }}"
+            "${{ steps.config.outputs.context }}"
 
+
+      # --------------------------------------------------------
+      # Push
+      # --------------------------------------------------------
       - name: Push Docker image
         if: github.event_name == 'push'
         run: |
+
           IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/online-boutique-${{ matrix.service }}:${GITHUB_SHA}"
 
           echo "Pushing: $IMAGE"
 
           docker push "$IMAGE"
 
+
+  # ============================================================
+  # 3. UPDATE ONLY CHANGED SERVICES IN GITOPS
+  # ============================================================
   update-gitops:
     name: Update GitOps repository
-    needs: build-and-push
-    if: github.event_name == 'push'
+
+    needs:
+      - detect-changes
+      - build-and-push
+
+    if: github.event_name == 'push' &&
+        needs.detect-changes.outputs.services != '[]'
+
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout GitOps repository
         uses: actions/checkout@v4
         with:
@@ -114,26 +250,99 @@ jobs:
           token: ${{ secrets.GITOPS_TOKEN }}
           path: gitops
 
-      - name: Update image tags
+
+      # --------------------------------------------------------
+      # Update only affected image tags
+      # --------------------------------------------------------
+      - name: Update changed image tags
         working-directory: gitops
+        env:
+          CHANGED_SERVICES: ${{ needs.detect-changes.outputs.services }}
+          SHA: ${{ github.sha }}
+
         run: |
-          SHA="${GITHUB_SHA}"
 
-          sed -i "s#newTag: .*#newTag: ${SHA}#g" overlays/minikube/kustomization.yaml
+          echo "======================================"
+          echo "Updating GitOps"
+          echo "Commit SHA: $SHA"
+          echo "Changed services:"
+          echo "$CHANGED_SERVICES" | jq .
+          echo "======================================"
 
-          echo "Updated GitOps image tag to:"
-          echo "$SHA"
+          python3 <<'PY'
 
+          import json
+          import os
+          import re
+
+          path = "overlays/minikube/kustomization.yaml"
+
+          with open(path, "r") as f:
+              content = f.read()
+
+          services = json.loads(os.environ["CHANGED_SERVICES"])
+          sha = os.environ["SHA"]
+
+          for service in services:
+
+              image_name = (
+                  f"ghcr.io/prithvi-a24/"
+                  f"online-boutique-{service}"
+              )
+
+              pattern = (
+                  rf"(newName:\s+{re.escape(image_name)}\s*\n"
+                  rf"\s+newTag:\s*)[^\n]+"
+              )
+
+              replacement = rf"\g<1>{sha}"
+
+              updated_content, count = re.subn(
+                  pattern,
+                  replacement,
+                  content
+              )
+
+              if count == 0:
+                  print(
+                      f"WARNING: No GitOps image mapping found "
+                      f"for {service}"
+                  )
+              else:
+                  print(
+                      f"Updated {service} -> {sha}"
+                  )
+
+              content = updated_content
+
+          with open(path, "w") as f:
+              f.write(content)
+
+          PY
+
+
+      # --------------------------------------------------------
+      # Verify
+      # --------------------------------------------------------
       - name: Verify GitOps configuration
         working-directory: gitops
         run: |
+
+          echo "Git diff:"
           git diff -- overlays/minikube/kustomization.yaml
 
+
+      # --------------------------------------------------------
+      # Commit
+      # --------------------------------------------------------
       - name: Commit and push GitOps change
         working-directory: gitops
         run: |
+
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add overlays/minikube/kustomization.yaml
 
@@ -142,5 +351,7 @@ jobs:
             exit 0
           fi
 
-          git commit -m "Update Online Boutique images to ${GITHUB_SHA}"
+          git commit \
+            -m "Update changed Online Boutique images to ${GITHUB_SHA}"
+
           git push origin main
