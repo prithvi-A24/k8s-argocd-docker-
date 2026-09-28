@@ -4,9 +4,18 @@ on:
   push:
     branches:
       - devops
+
   pull_request:
     branches:
       - devops
+
+  workflow_dispatch:
+    inputs:
+      bootstrap:
+        description: "Build and push all 12 services"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -17,7 +26,7 @@ permissions:
 jobs:
 
   # ============================================================
-  # 1. DETECT WHICH MICROSERVICES CHANGED
+  # 1. DETECT CHANGED SERVICES
   # ============================================================
 
   detect-changes:
@@ -28,6 +37,7 @@ jobs:
       services: ${{ steps.filter.outputs.changes }}
 
     steps:
+
       - name: Checkout source
         uses: actions/checkout@v4
 
@@ -36,6 +46,7 @@ jobs:
         uses: dorny/paths-filter@v3
         with:
           filters: |
+
             adservice:
               - 'src/adservice/**'
 
@@ -79,7 +90,13 @@ jobs:
 
 
   # ============================================================
-  # 2. BUILD + PUSH ONLY CHANGED SERVICES
+  # 2. BUILD + PUSH
+  #
+  # Normal push:
+  #   Only changed services
+  #
+  # Manual bootstrap:
+  #   All 12 services
   # ============================================================
 
   build-and-push:
@@ -87,28 +104,36 @@ jobs:
 
     needs: detect-changes
 
-    if: needs.detect-changes.outputs.services != '[]'
+    if: |
+      needs.detect-changes.outputs.services != '[]' ||
+      github.event_name == 'workflow_dispatch'
 
     runs-on: ubuntu-latest
 
     strategy:
       fail-fast: false
+
       matrix:
-        service: ${{ fromJSON(needs.detect-changes.outputs.services) }}
+        service: ${{ fromJSON(
+          github.event_name == 'workflow_dispatch' &&
+          inputs.bootstrap == true
+          && '["adservice","cartservice","checkoutservice","currencyservice","emailservice","frontend","loadgenerator","paymentservice","productcatalogservice","recommendationservice","shippingservice","shoppingassistantservice"]'
+          || needs.detect-changes.outputs.services
+        ) }}
 
     steps:
 
-      # --------------------------------------------------------
-      # Checkout
-      # --------------------------------------------------------
+      # ========================================================
+      # CHECKOUT
+      # ========================================================
 
       - name: Checkout source
         uses: actions/checkout@v4
 
 
-      # --------------------------------------------------------
-      # Authenticate to Google Cloud using GitHub OIDC
-      # --------------------------------------------------------
+      # ========================================================
+      # GOOGLE CLOUD AUTHENTICATION
+      # ========================================================
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
@@ -117,30 +142,33 @@ jobs:
           service_account: online-boutique-ci@avpn-dev-001.iam.gserviceaccount.com
 
 
-      # --------------------------------------------------------
-      # Configure gcloud
-      # --------------------------------------------------------
+      # ========================================================
+      # GOOGLE CLOUD SDK
+      # ========================================================
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v3
 
 
-      # --------------------------------------------------------
-      # Configure Docker for Artifact Registry
-      # --------------------------------------------------------
+      # ========================================================
+      # CONFIGURE DOCKER FOR ARTIFACT REGISTRY
+      # ========================================================
 
       - name: Configure Docker for Artifact Registry
         run: |
-          gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+          gcloud auth configure-docker \
+            us-central1-docker.pkg.dev \
+            --quiet
 
 
-      # --------------------------------------------------------
-      # Map service → Docker build context
-      # --------------------------------------------------------
+      # ========================================================
+      # MAP SERVICE → DOCKER CONTEXT + DOCKERFILE
+      # ========================================================
 
       - name: Set Docker build configuration
         id: config
         run: |
+
           case "${{ matrix.service }}" in
 
             adservice)
@@ -211,9 +239,9 @@ jobs:
           esac
 
 
-      # --------------------------------------------------------
-      # Login to GHCR
-      # --------------------------------------------------------
+      # ========================================================
+      # GHCR LOGIN
+      # ========================================================
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -223,61 +251,76 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
 
-      # --------------------------------------------------------
-      # Build image ONCE and tag for both registries
-      # --------------------------------------------------------
+      # ========================================================
+      # IMAGE NAMES
+      # ========================================================
+
+      - name: Set image names
+        id: image
+        run: |
+
+          GHCR_IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/online-boutique-${{ matrix.service }}:${GITHUB_SHA}"
+
+          GAR_IMAGE="us-central1-docker.pkg.dev/avpn-dev-001/online-boutique/${{ matrix.service }}:${GITHUB_SHA}"
+
+          echo "ghcr=$GHCR_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "gar=$GAR_IMAGE" >> "$GITHUB_OUTPUT"
+
+          echo "======================================"
+          echo "Service: ${{ matrix.service }}"
+          echo "GHCR:    $GHCR_IMAGE"
+          echo "GAR:     $GAR_IMAGE"
+          echo "======================================"
+
+
+      # ========================================================
+      # BUILD ONCE
+      # ========================================================
 
       - name: Build Docker image
         run: |
 
-          GHCR_IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/online-boutique-${{ matrix.service }}:${GITHUB_SHA}"
-
-          GAR_IMAGE="us-central1-docker.pkg.dev/avpn-dev-001/online-boutique/${{ matrix.service }}:${GITHUB_SHA}"
-
-          echo "======================================"
-          echo "Service: ${{ matrix.service }}"
-          echo "Context: ${{ steps.config.outputs.context }}"
-          echo "Dockerfile: ${{ steps.config.outputs.dockerfile }}"
-          echo "GHCR: $GHCR_IMAGE"
-          echo "GAR:  $GAR_IMAGE"
-          echo "======================================"
-
           docker build \
             -f "${{ steps.config.outputs.dockerfile }}" \
-            -t "$GHCR_IMAGE" \
-            -t "$GAR_IMAGE" \
+            -t "${{ steps.image.outputs.ghcr }}" \
+            -t "${{ steps.image.outputs.gar }}" \
             "${{ steps.config.outputs.context }}"
 
 
-      # --------------------------------------------------------
-      # Push to BOTH registries
-      # --------------------------------------------------------
+      # ========================================================
+      # PUSH TO GHCR
+      # ========================================================
 
-      - name: Push Docker images
-        if: github.event_name == 'push'
+      - name: Push Docker image to GHCR
+        if: github.event_name != 'pull_request'
         run: |
 
-          GHCR_IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/online-boutique-${{ matrix.service }}:${GITHUB_SHA}"
+          echo "Pushing to GHCR:"
+          echo "${{ steps.image.outputs.ghcr }}"
 
-          GAR_IMAGE="us-central1-docker.pkg.dev/avpn-dev-001/online-boutique/${{ matrix.service }}:${GITHUB_SHA}"
+          docker push "${{ steps.image.outputs.ghcr }}"
 
-          echo "======================================"
-          echo "Pushing to GHCR"
-          echo "$GHCR_IMAGE"
-          echo "======================================"
 
-          docker push "$GHCR_IMAGE"
+      # ========================================================
+      # PUSH TO ARTIFACT REGISTRY
+      # ========================================================
 
-          echo "======================================"
-          echo "Pushing to Artifact Registry"
-          echo "$GAR_IMAGE"
-          echo "======================================"
+      - name: Push Docker image to Artifact Registry
+        if: github.event_name != 'pull_request'
+        run: |
 
-          docker push "$GAR_IMAGE"
+          echo "Pushing to Artifact Registry:"
+          echo "${{ steps.image.outputs.gar }}"
+
+          docker push "${{ steps.image.outputs.gar }}"
 
 
   # ============================================================
-  # 3. UPDATE ONLY CHANGED SERVICES IN GITOPS
+  # 3. UPDATE GITOPS
+  #
+  # Only normal PUSH events.
+  #
+  # Bootstrap does NOT update GitOps.
   # ============================================================
 
   update-gitops:
@@ -287,16 +330,17 @@ jobs:
       - detect-changes
       - build-and-push
 
-    if: github.event_name == 'push' &&
-        needs.detect-changes.outputs.services != '[]'
+    if: |
+      github.event_name == 'push' &&
+      needs.detect-changes.outputs.services != '[]'
 
     runs-on: ubuntu-latest
 
     steps:
 
-      # --------------------------------------------------------
-      # Checkout GitOps repository
-      # --------------------------------------------------------
+      # ========================================================
+      # CHECKOUT GITOPS REPOSITORY
+      # ========================================================
 
       - name: Checkout GitOps repository
         uses: actions/checkout@v4
@@ -306,9 +350,9 @@ jobs:
           path: gitops
 
 
-      # --------------------------------------------------------
-      # Update only affected image tags
-      # --------------------------------------------------------
+      # ========================================================
+      # UPDATE ONLY CHANGED SERVICES
+      # ========================================================
 
       - name: Update changed image tags
         working-directory: gitops
@@ -384,9 +428,9 @@ jobs:
           PY
 
 
-      # --------------------------------------------------------
-      # Verify GitOps configuration
-      # --------------------------------------------------------
+      # ========================================================
+      # VERIFY GITOPS
+      # ========================================================
 
       - name: Verify GitOps configuration
         working-directory: gitops
@@ -398,9 +442,9 @@ jobs:
             overlays/minikube/kustomization.yaml
 
 
-      # --------------------------------------------------------
-      # Commit and push GitOps change
-      # --------------------------------------------------------
+      # ========================================================
+      # COMMIT + PUSH GITOPS
+      # ========================================================
 
       - name: Commit and push GitOps change
         working-directory: gitops
