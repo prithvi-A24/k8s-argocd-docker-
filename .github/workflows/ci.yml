@@ -23,6 +23,7 @@ permissions:
   pull-requests: read
   id-token: write
 
+
 jobs:
 
   # ============================================================
@@ -46,7 +47,6 @@ jobs:
         uses: dorny/paths-filter@v3
         with:
           filters: |
-
             adservice:
               - 'src/adservice/**'
 
@@ -90,23 +90,73 @@ jobs:
 
 
   # ============================================================
-  # 2. BUILD + PUSH
+  # 2. PREPARE SERVICE MATRIX
   #
   # Normal push:
-  #   Only changed services
+  #   Build only changed services
   #
-  # Manual bootstrap:
-  #   All 12 services
+  # Manual bootstrap=true:
+  #   Build all 12 services
+  #
+  # Manual bootstrap=false:
+  #   Build nothing
+  # ============================================================
+
+  prepare-services:
+    name: Prepare service matrix
+    needs: detect-changes
+    runs-on: ubuntu-latest
+
+    outputs:
+      services: ${{ steps.prepare.outputs.services }}
+
+    steps:
+
+      - name: Prepare services
+        id: prepare
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BOOTSTRAP: ${{ inputs.bootstrap }}
+          CHANGED_SERVICES: ${{ needs.detect-changes.outputs.services }}
+
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" && "$BOOTSTRAP" == "true" ]]; then
+
+            echo 'services=["adservice","cartservice","checkoutservice","currencyservice","emailservice","frontend","loadgenerator","paymentservice","productcatalogservice","recommendationservice","shippingservice","shoppingassistantservice"]' >> "$GITHUB_OUTPUT"
+
+          else
+
+            echo "services=$CHANGED_SERVICES" >> "$GITHUB_OUTPUT"
+
+          fi
+
+      - name: Show prepared services
+        run: |
+          echo "Services to build:"
+          echo '${{ steps.prepare.outputs.services }}' | jq .
+
+
+  # ============================================================
+  # 3. BUILD + PUSH
+  #
+  # Build image ONCE
+  #
+  # Then push the same image to:
+  #
+  #   1. GHCR
+  #   2. Artifact Registry
+  #
+  # Pull requests:
+  #   Build only
+  #   Do NOT push
   # ============================================================
 
   build-and-push:
     name: Build ${{ matrix.service }}
 
-    needs: detect-changes
+    needs: prepare-services
 
-    if: |
-      needs.detect-changes.outputs.services != '[]' ||
-      github.event_name == 'workflow_dispatch'
+    if: needs.prepare-services.outputs.services != '[]'
 
     runs-on: ubuntu-latest
 
@@ -114,17 +164,12 @@ jobs:
       fail-fast: false
 
       matrix:
-        service: ${{ fromJSON(
-          github.event_name == 'workflow_dispatch' &&
-          inputs.bootstrap == true
-          && '["adservice","cartservice","checkoutservice","currencyservice","emailservice","frontend","loadgenerator","paymentservice","productcatalogservice","recommendationservice","shippingservice","shoppingassistantservice"]'
-          || needs.detect-changes.outputs.services
-        ) }}
+        service: ${{ fromJSON(needs.prepare-services.outputs.services) }}
 
     steps:
 
       # ========================================================
-      # CHECKOUT
+      # CHECKOUT SOURCE
       # ========================================================
 
       - name: Checkout source
@@ -162,11 +207,12 @@ jobs:
 
 
       # ========================================================
-      # MAP SERVICE → DOCKER CONTEXT + DOCKERFILE
+      # MAP SERVICE TO DOCKER CONTEXT + DOCKERFILE
       # ========================================================
 
       - name: Set Docker build configuration
         id: config
+
         run: |
 
           case "${{ matrix.service }}" in
@@ -257,6 +303,7 @@ jobs:
 
       - name: Set image names
         id: image
+
         run: |
 
           GHCR_IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/online-boutique-${{ matrix.service }}:${GITHUB_SHA}"
@@ -274,7 +321,7 @@ jobs:
 
 
       # ========================================================
-      # BUILD ONCE
+      # BUILD IMAGE ONCE
       # ========================================================
 
       - name: Build Docker image
@@ -293,6 +340,7 @@ jobs:
 
       - name: Push Docker image to GHCR
         if: github.event_name != 'pull_request'
+
         run: |
 
           echo "Pushing to GHCR:"
@@ -307,6 +355,7 @@ jobs:
 
       - name: Push Docker image to Artifact Registry
         if: github.event_name != 'pull_request'
+
         run: |
 
           echo "Pushing to Artifact Registry:"
@@ -316,11 +365,18 @@ jobs:
 
 
   # ============================================================
-  # 3. UPDATE GITOPS
+  # 4. UPDATE GITOPS
   #
   # Only normal PUSH events.
   #
-  # Bootstrap does NOT update GitOps.
+  # PR:
+  #   No GitOps update
+  #
+  # Bootstrap:
+  #   No GitOps update
+  #
+  # Normal push:
+  #   Update only changed services
   # ============================================================
 
   update-gitops:
@@ -328,11 +384,12 @@ jobs:
 
     needs:
       - detect-changes
+      - prepare-services
       - build-and-push
 
     if: |
       github.event_name == 'push' &&
-      needs.detect-changes.outputs.services != '[]'
+      needs.prepare-services.outputs.services != '[]'
 
     runs-on: ubuntu-latest
 
@@ -358,7 +415,7 @@ jobs:
         working-directory: gitops
 
         env:
-          CHANGED_SERVICES: ${{ needs.detect-changes.outputs.services }}
+          CHANGED_SERVICES: ${{ needs.prepare-services.outputs.services }}
           SHA: ${{ github.sha }}
 
         run: |
@@ -429,11 +486,12 @@ jobs:
 
 
       # ========================================================
-      # VERIFY GITOPS
+      # VERIFY GITOPS CONFIGURATION
       # ========================================================
 
       - name: Verify GitOps configuration
         working-directory: gitops
+
         run: |
 
           echo "Git diff:"
@@ -443,11 +501,12 @@ jobs:
 
 
       # ========================================================
-      # COMMIT + PUSH GITOPS
+      # COMMIT + PUSH GITOPS CHANGE
       # ========================================================
 
       - name: Commit and push GitOps change
         working-directory: gitops
+
         run: |
 
           git config user.name "github-actions[bot]"
