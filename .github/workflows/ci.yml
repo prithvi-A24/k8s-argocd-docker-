@@ -17,6 +17,7 @@ on:
         default: false
         type: boolean
 
+
 permissions:
   contents: read
   packages: write
@@ -45,8 +46,10 @@ jobs:
       - name: Detect changed services
         id: filter
         uses: dorny/paths-filter@v3
+
         with:
           filters: |
+
             adservice:
               - 'src/adservice/**'
 
@@ -83,10 +86,13 @@ jobs:
             shoppingassistantservice:
               - 'src/shoppingassistantservice/**'
 
+
       - name: Show changed services
         run: |
+          echo "======================================"
           echo "Changed services:"
           echo '${{ steps.filter.outputs.changes }}' | jq .
+          echo "======================================"
 
 
   # ============================================================
@@ -104,7 +110,10 @@ jobs:
 
   prepare-services:
     name: Prepare service matrix
-    needs: detect-changes
+
+    needs:
+      - detect-changes
+
     runs-on: ubuntu-latest
 
     outputs:
@@ -114,12 +123,18 @@ jobs:
 
       - name: Prepare services
         id: prepare
+
         env:
           EVENT_NAME: ${{ github.event_name }}
           BOOTSTRAP: ${{ inputs.bootstrap }}
           CHANGED_SERVICES: ${{ needs.detect-changes.outputs.services }}
 
         run: |
+
+          echo "Event: $EVENT_NAME"
+          echo "Bootstrap: $BOOTSTRAP"
+          echo "Changed services: $CHANGED_SERVICES"
+
           if [[ "$EVENT_NAME" == "workflow_dispatch" && "$BOOTSTRAP" == "true" ]]; then
 
             echo 'services=["adservice","cartservice","checkoutservice","currencyservice","emailservice","frontend","loadgenerator","paymentservice","productcatalogservice","recommendationservice","shippingservice","shoppingassistantservice"]' >> "$GITHUB_OUTPUT"
@@ -130,21 +145,24 @@ jobs:
 
           fi
 
+
       - name: Show prepared services
         run: |
+          echo "======================================"
           echo "Services to build:"
           echo '${{ steps.prepare.outputs.services }}' | jq .
+          echo "======================================"
 
 
   # ============================================================
   # 3. BUILD + PUSH
   #
-  # Build image ONCE
+  # Build image ONCE.
   #
-  # Then push the same image to:
+  # Push the same image to:
   #
   #   1. GHCR
-  #   2. Artifact Registry
+  #   2. Google Artifact Registry
   #
   # Pull requests:
   #   Build only
@@ -154,7 +172,8 @@ jobs:
   build-and-push:
     name: Build ${{ matrix.service }}
 
-    needs: prepare-services
+    needs:
+      - prepare-services
 
     if: needs.prepare-services.outputs.services != '[]'
 
@@ -165,6 +184,7 @@ jobs:
 
       matrix:
         service: ${{ fromJSON(needs.prepare-services.outputs.services) }}
+
 
     steps:
 
@@ -182,6 +202,7 @@ jobs:
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
+
         with:
           workload_identity_provider: projects/1034264155999/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider
           service_account: online-boutique-ci@avpn-dev-001.iam.gserviceaccount.com
@@ -196,14 +217,62 @@ jobs:
 
 
       # ========================================================
+      # VERIFY GOOGLE CLOUD AUTHENTICATION
+      # ========================================================
+
+      - name: Verify Google Cloud authentication
+        run: |
+
+          echo "======================================"
+          echo "Active Google Cloud account"
+          echo "======================================"
+
+          gcloud auth list
+
+          echo ""
+          echo "======================================"
+          echo "Active Google Cloud project"
+          echo "======================================"
+
+          gcloud config get-value project
+
+          echo ""
+          echo "======================================"
+          echo "Access token test"
+          echo "======================================"
+
+          gcloud auth print-access-token >/dev/null
+
+          echo ""
+          echo "Google Cloud authentication is working."
+
+
+      # ========================================================
       # CONFIGURE DOCKER FOR ARTIFACT REGISTRY
       # ========================================================
 
       - name: Configure Docker for Artifact Registry
         run: |
+
           gcloud auth configure-docker \
             us-central1-docker.pkg.dev \
             --quiet
+
+
+      # ========================================================
+      # VERIFY ARTIFACT REGISTRY ACCESS
+      # ========================================================
+
+      - name: Verify Artifact Registry access
+        run: |
+
+          echo "======================================"
+          echo "Artifact Registry repository"
+          echo "======================================"
+
+          gcloud artifacts repositories describe online-boutique \
+            --project=avpn-dev-001 \
+            --location=us-central1
 
 
       # ========================================================
@@ -291,6 +360,7 @@ jobs:
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
+
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -298,7 +368,7 @@ jobs:
 
 
       # ========================================================
-      # IMAGE NAMES
+      # SET IMAGE NAMES
       # ========================================================
 
       - name: Set image names
@@ -311,27 +381,46 @@ jobs:
           GAR_IMAGE="us-central1-docker.pkg.dev/avpn-dev-001/online-boutique/${{ matrix.service }}:${GITHUB_SHA}"
 
           echo "ghcr=$GHCR_IMAGE" >> "$GITHUB_OUTPUT"
+
           echo "gar=$GAR_IMAGE" >> "$GITHUB_OUTPUT"
 
           echo "======================================"
           echo "Service: ${{ matrix.service }}"
-          echo "GHCR:    $GHCR_IMAGE"
-          echo "GAR:     $GAR_IMAGE"
+          echo "======================================"
+          echo "GHCR:"
+          echo "$GHCR_IMAGE"
+          echo ""
+          echo "Artifact Registry:"
+          echo "$GAR_IMAGE"
           echo "======================================"
 
 
       # ========================================================
       # BUILD IMAGE ONCE
+      #
+      # The same local Docker image receives two tags.
       # ========================================================
 
       - name: Build Docker image
         run: |
+
+          echo "Building ${{ matrix.service }}..."
 
           docker build \
             -f "${{ steps.config.outputs.dockerfile }}" \
             -t "${{ steps.image.outputs.ghcr }}" \
             -t "${{ steps.image.outputs.gar }}" \
             "${{ steps.config.outputs.context }}"
+
+
+      # ========================================================
+      # SHOW LOCAL IMAGE
+      # ========================================================
+
+      - name: Verify local Docker image
+        run: |
+
+          docker images | grep "online-boutique-${{ matrix.service }}" || true
 
 
       # ========================================================
@@ -343,7 +432,10 @@ jobs:
 
         run: |
 
-          echo "Pushing to GHCR:"
+          echo "======================================"
+          echo "Pushing to GHCR"
+          echo "======================================"
+
           echo "${{ steps.image.outputs.ghcr }}"
 
           docker push "${{ steps.image.outputs.ghcr }}"
@@ -358,10 +450,31 @@ jobs:
 
         run: |
 
-          echo "Pushing to Artifact Registry:"
+          echo "======================================"
+          echo "Pushing to Artifact Registry"
+          echo "======================================"
+
           echo "${{ steps.image.outputs.gar }}"
 
           docker push "${{ steps.image.outputs.gar }}"
+
+
+      # ========================================================
+      # VERIFY IMAGE PUSH
+      # ========================================================
+
+      - name: Verify Artifact Registry image
+        if: github.event_name != 'pull_request'
+
+        run: |
+
+          echo "======================================"
+          echo "Verifying image in Artifact Registry"
+          echo "======================================"
+
+          gcloud artifacts docker images describe \
+            "${{ steps.image.outputs.gar }}" \
+            --project=avpn-dev-001
 
 
   # ============================================================
@@ -369,7 +482,7 @@ jobs:
   #
   # Only normal PUSH events.
   #
-  # PR:
+  # Pull request:
   #   No GitOps update
   #
   # Bootstrap:
@@ -401,6 +514,7 @@ jobs:
 
       - name: Checkout GitOps repository
         uses: actions/checkout@v4
+
         with:
           repository: prithvi-A24/k8s-argocd-docker-gitops
           token: ${{ secrets.GITOPS_TOKEN }}
@@ -422,10 +536,17 @@ jobs:
 
           echo "======================================"
           echo "Updating GitOps"
-          echo "Commit SHA: $SHA"
+          echo "======================================"
+
+          echo "Commit SHA:"
+          echo "$SHA"
+
+          echo ""
           echo "Changed services:"
           echo "$CHANGED_SERVICES" | jq .
+
           echo "======================================"
+
 
           python3 <<'PY'
 
@@ -494,14 +615,16 @@ jobs:
 
         run: |
 
-          echo "Git diff:"
+          echo "======================================"
+          echo "Git diff"
+          echo "======================================"
 
           git diff -- \
             overlays/minikube/kustomization.yaml
 
 
       # ========================================================
-      # COMMIT + PUSH GITOPS CHANGE
+      # COMMIT + PUSH GITOPS
       # ========================================================
 
       - name: Commit and push GitOps change
@@ -514,8 +637,10 @@ jobs:
           git config user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
 
+
           git add \
             overlays/minikube/kustomization.yaml
+
 
           if git diff --cached --quiet; then
 
@@ -525,7 +650,9 @@ jobs:
 
           fi
 
+
           git commit \
             -m "Update changed Online Boutique images to ${GITHUB_SHA}"
+
 
           git push origin main
